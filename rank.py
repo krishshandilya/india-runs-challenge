@@ -17,9 +17,9 @@ def parse_date(date_str):
         return None
 
 def is_honeypot(c):
-    profile = c.get('profile', {})
-    history = c.get('career_history', [])
-    skills = c.get('skills', [])
+    profile = c.get('profile') or {}
+    history = c.get('career_history') or []
+    skills = c.get('skills') or []
     
     # 1. Job duration mismatch (> 6 months)
     curr_date = datetime(2026, 6, 15)
@@ -27,6 +27,11 @@ def is_honeypot(c):
         start = parse_date(h.get('start_date'))
         end = parse_date(h.get('end_date')) if h.get('end_date') else curr_date
         stated_months = h.get('duration_months')
+        if stated_months is not None:
+            try:
+                stated_months = int(stated_months)
+            except (ValueError, TypeError):
+                stated_months = None
         
         if start and end and stated_months is not None:
             calc_months = (end.year - start.year) * 12 + (end.month - start.month)
@@ -44,39 +49,58 @@ def is_honeypot(c):
             total_span_months = (latest_end.year - earliest_start.year) * 12 + (latest_end.month - earliest_start.month)
             total_span_years = total_span_months / 12.0
             
-            if profile.get('years_of_experience', 0) > total_span_years + 3.0:
+            exp = profile.get('years_of_experience')
+            try:
+                exp = float(exp) if exp is not None else 0.0
+            except (ValueError, TypeError):
+                exp = 0.0
+            
+            if exp > total_span_years + 3.0:
                 return True, "Experience exceeds span"
 
     # 3. Expert/advanced skills with 0 months duration (>= 3 skills)
     expert_zero_dur = 0
     for s in skills:
-        if s.get('proficiency') in ['advanced', 'expert'] and s.get('duration_months', 0) == 0:
+        prof = s.get('proficiency')
+        try:
+            dur = int(s.get('duration_months') or 0)
+        except (ValueError, TypeError):
+            dur = 0
+        if prof in ['advanced', 'expert'] and dur == 0:
             expert_zero_dur += 1
     if expert_zero_dur >= 3:
         return True, "Expert skills with 0 duration"
         
     # 4. Company age vs job duration in description
     for h_idx, h in enumerate(history):
-        desc = h.get('description', '').lower()
+        desc = str(h.get('description') or '').lower()
         m = re.search(r'(\d+)\s*year\s*old\s*startup', desc)
         if m:
             startup_age = int(m.group(1))
-            stated_months = h.get('duration_months', 0)
+            stated_months = h.get('duration_months') or 0
+            try:
+                stated_months = int(stated_months)
+            except (ValueError, TypeError):
+                stated_months = 0
             if stated_months / 12.0 > startup_age + 2:
                 return True, f"Job {h_idx} age mismatch"
                 
     return False, ""
 
-def compute_heuristics(c):
-    profile = c.get('profile', {})
-    history = c.get('career_history', [])
-    signals = c.get('redrob_signals', {})
+def compute_heuristics(c, target_title_emb, text_to_emb):
+    profile = c.get('profile') or {}
+    history = c.get('career_history') or []
+    signals = c.get('redrob_signals') or {}
     
-    title = profile.get('current_title', '').lower()
-    headline = profile.get('headline', '').lower()
+    title = profile.get('current_title') or ''
+    headline = profile.get('headline') or ''
     
     # 1. Experience score (Ideal: 5-9 years)
-    exp = profile.get('years_of_experience', 0)
+    exp = profile.get('years_of_experience')
+    try:
+        exp = float(exp) if exp is not None else 0.0
+    except (ValueError, TypeError):
+        exp = 0.0
     exp_score = 0.1
     if 5.0 <= exp <= 9.0:
         exp_score = 1.0
@@ -92,8 +116,8 @@ def compute_heuristics(c):
         exp_score = 0.2
         
     # 2. Location score (Noida/Pune preferred)
-    loc = profile.get('location', '').lower()
-    country = profile.get('country', '').lower()
+    loc = str(profile.get('location') or '').lower()
+    country = str(profile.get('country') or '').lower()
     willing_relocate = signals.get('willing_to_relocate', False)
     
     is_pune_noida = any(city in loc for city in ["pune", "noida", "delhi", "gurgaon", "ghaziabad", "faridabad"])
@@ -113,7 +137,7 @@ def compute_heuristics(c):
             
     # 3. Product vs Consulting score (Disqualify/penalize TCS/Infosys etc. if entire career)
     consulting_firms = ["tcs", "infosys", "wipro", "accenture", "cognizant", "capgemini", "tata consultancy", "wipro technologies", "infosys limited"]
-    all_companies = [h.get('company', '').lower() for h in history if h.get('company')]
+    all_companies = [str(h.get('company') or '').lower() for h in history if h.get('company')]
     
     company_score = 0.5
     if all_companies:
@@ -121,29 +145,41 @@ def compute_heuristics(c):
         if is_only_consulting:
             company_score = 0.0
         else:
+            # Check if they have product company experience
             has_product = any(not any(cf in comp for cf in consulting_firms) for comp in all_companies)
             if has_product:
                 company_score = 1.0
                 
-    # 4. Title match score (Additional safeguard)
-    target_titles = ["ai engineer", "ml engineer", "machine learning engineer", "nlp engineer", "search engineer", "ranking engineer", "retrieval engineer", "founding engineer"]
-    title_score = 0.2
-    if any(t in title for t in target_titles) or any(t in headline for t in target_titles):
-        title_score = 1.0
-    elif "data scientist" in title or "data scientist" in headline:
-        title_score = 0.8
-    elif "backend engineer" in title or "software engineer" in title or "backend engineer" in headline or "software" in headline:
-        title_score = 0.5
+    # 4. Semantic Title Match Heuristic
+    t_emb = text_to_emb[title] if title in text_to_emb else np.zeros(384)
+    h_emb = text_to_emb[headline] if headline in text_to_emb else np.zeros(384)
+    
+    sim_title = np.dot(t_emb, target_title_emb) if title else 0.0
+    sim_headline = np.dot(h_emb, target_title_emb) if headline else 0.0
+    
+    # Bounded in [0, 1] representing continuous semantic similarity
+    title_score = max(0.0, max(sim_title, sim_headline))
         
     heuristic_score = 0.35 * exp_score + 0.35 * location_score + 0.20 * company_score + 0.10 * title_score
     return heuristic_score
 
 def compute_behavior_multiplier(c):
-    signals = c.get('redrob_signals', {})
-    response_rate = signals.get('recruiter_response_rate', 0.5)
-    open_to_work = signals.get('open_to_work_flag', False)
-    notice_period = signals.get('notice_period_days', 60)
+    signals = c.get('redrob_signals') or {}
     
+    response_rate = signals.get('recruiter_response_rate')
+    try:
+        response_rate = float(response_rate) if response_rate is not None else 0.5
+    except (ValueError, TypeError):
+        response_rate = 0.5
+        
+    open_to_work = signals.get('open_to_work_flag', False)
+    
+    notice_period = signals.get('notice_period_days')
+    try:
+        notice_period = int(notice_period) if notice_period is not None else 60
+    except (ValueError, TypeError):
+        notice_period = 60
+        
     last_act = parse_date(signals.get('last_active_date'))
     curr_date = datetime(2026, 6, 15)
     
@@ -157,11 +193,11 @@ def compute_behavior_multiplier(c):
         elif act_months <= 6:
             active_mult = 0.7
         else:
-            active_mult = 0.7
+            active_mult = 0.7  # Relaxed from 0.3 to 0.7
             
     resp_mult = 0.5 + 0.5 * response_rate
     if response_rate < 0.10:
-        resp_mult = 0.5
+        resp_mult = 0.5  # Relaxed from 0.2 to 0.5
         
     otw_mult = 1.0 if open_to_work else 0.85
     
@@ -175,59 +211,86 @@ def compute_behavior_multiplier(c):
         
     return active_mult * resp_mult * otw_mult * notice_mult
 
+
 def make_candidate_text(c):
-    profile = c.get('profile', {})
-    skills = c.get('skills', [])
-    history = c.get('career_history', [])
+    profile = c.get('profile') or {}
+    skills = c.get('skills') or []
+    history = c.get('career_history') or []
     
     parts = []
     
-    title = profile.get('current_title', '')
-    headline = profile.get('headline', '')
+    title = profile.get('current_title') or ''
+    headline = profile.get('headline') or ''
     if title:
         parts.append(f"Title: {title}")
     if headline:
         parts.append(f"Headline: {headline}")
     
-    summary = profile.get('summary', '')
+    summary = profile.get('summary') or ''
     if summary:
         parts.append(f"Summary: {summary}")
         
     skills_strs = []
     for s in skills[:15]:
-        name = s.get('name', '')
-        prof = s.get('proficiency', '')
-        dur = s.get('duration_months', 0)
-        skills_strs.append(f"{name} ({prof}, {dur}m)")
+        name = s.get('name') or ''
+        prof = s.get('proficiency') or ''
+        dur = s.get('duration_months')
+        try:
+            dur = int(dur) if dur is not None else 0
+        except (ValueError, TypeError):
+            dur = 0
+        if name:
+            skills_strs.append(f"{name} ({prof}, {dur}m)")
     if skills_strs:
         parts.append("Skills: " + ", ".join(skills_strs))
         
     hist_strs = []
     for h in history[:3]:
-        h_title = h.get('title', '')
-        h_comp = h.get('company', '')
-        h_dur = h.get('duration_months', 0)
-        h_desc = h.get('description', '')
-        hist_strs.append(f"Role: {h_title} at {h_comp} ({h_dur}m). Description: {h_desc[:150]}")
+        h_title = h.get('title') or ''
+        h_comp = h.get('company') or ''
+        dur = h.get('duration_months')
+        try:
+            dur = int(dur) if dur is not None else 0
+        except (ValueError, TypeError):
+            dur = 0
+        h_desc = str(h.get('description') or '')
+        hist_strs.append(f"Role: {h_title} at {h_comp} ({dur}m). Description: {h_desc[:150]}")
     if hist_strs:
         parts.append("Experience:\n" + "\n".join(hist_strs))
         
     return "\n".join(parts)
 
 def generate_reasoning(c, rank, score):
-    profile = c.get('profile', {})
-    skills = c.get('skills', [])
-    signals = c.get('redrob_signals', {})
+    profile = c.get('profile') or {}
+    skills = c.get('skills') or []
+    signals = c.get('redrob_signals') or {}
     
-    title = profile.get('current_title', 'Engineer')
-    exp = profile.get('years_of_experience', 0)
-    location = profile.get('location', 'India')
-    notice = signals.get('notice_period_days', 60)
-    resp = int(signals.get('recruiter_response_rate', 0.0) * 100)
+    title = profile.get('current_title') or 'Engineer'
+    exp = profile.get('years_of_experience')
+    try:
+        exp = float(exp) if exp is not None else 0.0
+    except (ValueError, TypeError):
+        exp = 0.0
+        
+    location = profile.get('location') or 'India'
     
-    skill_names = [s.get('name') for s in skills[:3]]
+    notice = signals.get('notice_period_days')
+    try:
+        notice = int(notice) if notice is not None else 60
+    except (ValueError, TypeError):
+        notice = 60
+        
+    resp_rate = signals.get('recruiter_response_rate')
+    try:
+        resp_rate = float(resp_rate) if resp_rate is not None else 0.0
+    except (ValueError, TypeError):
+        resp_rate = 0.0
+    resp = int(resp_rate * 100)
+    
+    skill_names = [s.get('name') for s in skills[:3] if s.get('name')]
     skills_text = ", ".join(skill_names) if skill_names else "applied machine learning"
     
+    # Sentence 1: Background and Experience fit
     if rank <= 15:
         s1 = f"Outstanding {title} with {exp} years of experience demonstrating strong systems engineering capabilities."
     elif rank <= 50:
@@ -235,12 +298,17 @@ def generate_reasoning(c, rank, score):
     else:
         s1 = f"Capable professional with {exp} years of software experience and strong fundamentals in {skills_text}."
         
+    # Sentence 2: JD Match & Concerns
     concerns = []
     if notice > 60:
         concerns.append(f"{notice}-day notice period")
-    if signals.get('recruiter_response_rate', 1.0) < 0.40:
+    if resp_rate < 0.40:
         concerns.append("lower response rate")
-    if not signals.get('willing_to_relocate', True) and location.lower() not in ["pune", "noida", "delhi", "gurgaon"]:
+        
+    loc_lower = str(location).lower()
+    is_local = any(city in loc_lower for city in ["pune", "noida", "delhi", "gurgaon"])
+    willing_relocate = signals.get('willing_to_relocate', True)
+    if not willing_relocate and not is_local:
         concerns.append("relocation constraint")
         
     if concerns:
@@ -264,14 +332,22 @@ def main():
     
     if not os.path.exists(args.embeddings) or not os.path.exists(args.candidate_ids):
         print(f"Error: Precomputed embeddings ({args.embeddings}) or mapping ({args.candidate_ids}) not found.")
+        print("Please run precompute.py first.")
         sys.exit(1)
         
+    print("Loading local Bi-Encoder...")
     bi_model = SentenceTransformer(bi_encoder_path)
+    
+    print("Loading local Cross-Encoder...")
     cross_model = CrossEncoder(cross_encoder_path)
     
+    print("Loading precomputed candidate mappings...")
     with open(args.candidate_ids, "r", encoding="utf-8") as f:
         candidate_ids = json.load(f)
+        
     id_to_idx = {cand_id: idx for idx, cand_id in enumerate(candidate_ids)}
+    
+    print("Loading candidate embeddings...")
     embeddings = np.load(args.embeddings)
     
     jd_text = """
@@ -282,19 +358,59 @@ def main():
     Production experience with embeddings-based retrieval systems (sentence-transformers, OpenAI embeddings, BGE, E5, or similar) deployed to real users.
     Production experience with vector databases or hybrid search infrastructure — Pinecone, Weaviate, Qdrant, Milvus, OpenSearch, Elasticsearch, FAISS, or similar.
     Strong Python.
+    Hands-on experience designing evaluation frameworks for ranking systems — NDCG, MRR, MAP, offline-to-online correlation, A/B test interpretation.
     """
     
+    print("Embedding Job Description...")
     jd_embedding = bi_model.encode(jd_text, normalize_embeddings=True)
+    
+    print("Computing bi-encoder similarity scores...")
     similarities = np.dot(embeddings, jd_embedding)
     
-    valid_candidates = []
-    skipped_honeypots = 0
+    target_title_str = "Senior AI Engineer"
+    print(f"Pre-encoding target title for heuristics: '{target_title_str}'")
+    target_title_emb = bi_model.encode(target_title_str, normalize_embeddings=True)
     
+    print("Collecting unique candidate titles and headlines...")
+    unique_texts = set()
     with open(args.candidates, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
             c = json.loads(line)
+            is_hp, _ = is_honeypot(c)
+            if is_hp:
+                continue
+            cand_id = c['candidate_id']
+            if cand_id not in id_to_idx:
+                continue
+            profile = c.get('profile') or {}
+            title = profile.get('current_title') or ''
+            headline = profile.get('headline') or ''
+            if title:
+                unique_texts.add(title)
+            if headline:
+                unique_texts.add(headline)
+                
+    if unique_texts:
+        print(f"Embedding {len(unique_texts)} unique titles and headlines...")
+        unique_list = list(unique_texts)
+        unique_embs = bi_model.encode(unique_list, batch_size=256, show_progress_bar=False, normalize_embeddings=True)
+        text_to_emb = {text: unique_embs[idx] for idx, text in enumerate(unique_list)}
+    else:
+        text_to_emb = {}
+
+    valid_candidates = []
+    skipped_honeypots = 0
+    
+    print("Parsing candidate metadata and running heuristic filters...")
+    with open(args.candidates, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            c = json.loads(line)
+            
+            # Skip honeypots immediately
             is_hp, _ = is_honeypot(c)
             if is_hp:
                 skipped_honeypots += 1
@@ -306,7 +422,8 @@ def main():
                 
             idx = id_to_idx[cand_id]
             bi_sim = similarities[idx]
-            heuristic_score = compute_heuristics(c)
+            
+            heuristic_score = compute_heuristics(c, target_title_emb, text_to_emb)
             behavior_mult = compute_behavior_multiplier(c)
             
             valid_candidates.append({
@@ -316,26 +433,44 @@ def main():
                 "behavior_mult": behavior_mult
             })
             
+    print(f"Skipped {skipped_honeypots} honeypot profiles.")
+    print(f"Processing {len(valid_candidates)} valid candidates.")
+    
+    # Calculate a baseline retrieval score using multiplicative heuristics
     for item in valid_candidates:
         bi_sim_norm = max(0.0, item["bi_similarity"])
         item["preliminary_score"] = bi_sim_norm * (0.7 + 0.3 * item["heuristic_score"])
         
+    # Retrieve top 500 candidates based on preliminary score for re-ranking
     valid_candidates.sort(key=lambda x: x["preliminary_score"], reverse=True)
-    top_candidates = valid_candidates[:300]
+    top_candidates = valid_candidates[:500]
     
+    print("Running Cross-Encoder re-ranking on top 500 candidates...")
+    if not top_candidates:
+        print("Error: No valid candidates found to re-rank.")
+        sys.exit(1)
     pairs = [(jd_text, make_candidate_text(item["candidate"])) for item in top_candidates]
     cross_scores = cross_model.predict(pairs, batch_size=32)
-    semantic_scores = 1.0 / (1.0 + np.exp(-cross_scores))
     
+    # Sigmoid normalization of raw logits (clipped for numerical stability)
+    semantic_scores = 1.0 / (1.0 + np.exp(-np.clip(cross_scores, -20.0, 20.0)))
+    
+    # Calculate final scores for the top 500 using multiplicative heuristics
     ranked_results = []
     for item, sem_score in zip(top_candidates, semantic_scores):
         final_score = sem_score * (0.7 + 0.3 * item["heuristic_score"]) * item["behavior_mult"]
         ranked_results.append((item["candidate"], final_score))
+
         
+    # Sort top candidates by final score descending, and then candidate_id ascending for deterministic tie-breaker
     ranked_results.sort(key=lambda x: (-x[1], x[0]['candidate_id']))
+    
+    # Select the final top 100
     top_100 = ranked_results[:100]
     
+    # Write to target CSV using a temporary file fallback to handle OS file locks
     temp_out = args.out + ".tmp"
+    print(f"Writing top 100 candidates to temporary file {temp_out}...")
     with open(temp_out, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["candidate_id", "rank", "score", "reasoning"])
@@ -344,9 +479,16 @@ def main():
             reasoning = generate_reasoning(c, rank, score)
             writer.writerow([c['candidate_id'], rank, score, reasoning])
             
-    if os.path.exists(args.out):
-        os.remove(args.out)
-    os.rename(temp_out, args.out)
+    try:
+        if os.path.exists(args.out):
+            os.remove(args.out)
+        os.rename(temp_out, args.out)
+        print(f"Successfully ranked candidates and wrote output to {args.out}")
+    except PermissionError as e:
+        print(f"Error: Permission denied writing to '{args.out}'. Details: {e}", file=sys.stderr)
+        print(f"Temporary output has been saved to: '{temp_out}'", file=sys.stderr)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
