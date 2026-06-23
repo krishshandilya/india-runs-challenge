@@ -13,7 +13,7 @@ team_members:
 
 github_repo: "https://github.com/krish/india-runs-challenge"
 sandbox_link: "https://huggingface.co/spaces/krish/redrob-ranker"
-reproduce_command: "python rank.py --candidates ./[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl --out ./team_antigravity.csv"
+reproduce_command: "python rank.py --candidates ./[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl --out ./candidate_rankings.csv"
 
 compute:
   platform: "Windows PC"
