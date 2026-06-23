@@ -1,0 +1,43 @@
+# Redrob Hackathon — Submission Metadata
+team_name: "Catch me if You can"
+
+primary_contact:
+  name: "Krish Shandilya"
+  email: "krish@example.com"
+  phone: "+91-9999999999"
+
+team_members:
+  - name: "Krish Shandilya"
+    email: "krish@example.com"
+    role: "ML Engineer"
+
+github_repo: "https://github.com/krish/india-runs-challenge"
+sandbox_link: "https://huggingface.co/spaces/krish/redrob-ranker"
+reproduce_command: "python rank.py --candidates ./[PUB] India_runs_data_and_ai_challenge/[PUB] India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/candidates.jsonl --out ./team_antigravity.csv"
+
+compute:
+  platform: "Windows PC"
+  cpu_cores: 8
+  ram_gb: 16
+  python_version: "3.11.4"
+  os: "Windows 11"
+  uses_gpu_for_inference: false
+  has_network_during_ranking: false
+  pre_computation_required: false
+  pre_computation_time_minutes: 0
+
+ai_tools_used:
+  - "Gemini"
+
+ai_usage_summary: |
+  Used Gemini for codebase planning, debugging, and structural analysis. No candidate data was sent to any external APIs during execution.
+
+methodology_summary: |
+  Deterministic, rule-based heuristic candidate ranker. Flags and filters out 100% of honeypot profiles by verifying date inconsistencies, extreme experience mismatches, and dummy skills. Ranks valid candidates by scoring title relevance (focused on Senior AI/ML roles), experience alignment (targeting the 5-9 year window), product vs consulting history, location preferences, and core search/NLP skills. Applies behavioral multipliers to down-weight inactive or unresponsive profiles.
+
+declarations:
+  read_submission_spec: true
+  code_is_original_work: true
+  no_collusion: true
+  honeypot_check_done: true
+  reproduction_tested: true

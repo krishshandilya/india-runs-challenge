@@ -1,0 +1,28 @@
+# Python Caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# Large Model Weights (Downloaded locally)
+models/
+
+# Precomputed Data Matrices (150MB+)
+embeddings.npy
+candidate_ids.json
+
+# Dataset and Templates (Organizers' raw files)
+[PUB] India_runs_data_and_ai_challenge/
+TeamMates.zip
+hackathon-winner-os.skill
+hackathon-winner-os_extracted/
+
+# Temporary and Intermediate Artifacts
+*.tmp
+*.html
+.DS_Store
+Thumbs.db
