@@ -264,6 +264,7 @@ def generate_reasoning(c, rank, score):
     profile = c.get('profile') or {}
     skills = c.get('skills') or []
     signals = c.get('redrob_signals') or {}
+    history = c.get('career_history') or []
     
     title = profile.get('current_title') or 'Engineer'
     exp = profile.get('years_of_experience')
@@ -282,41 +283,66 @@ def generate_reasoning(c, rank, score):
         
     resp_rate = signals.get('recruiter_response_rate')
     try:
-        resp_rate = float(resp_rate) if resp_rate is not None else 0.0
+        resp_rate = float(resp_rate) if resp_rate is not None else 0.5
     except (ValueError, TypeError):
-        resp_rate = 0.0
+        resp_rate = 0.5
     resp = int(resp_rate * 100)
     
-    skill_names = [s.get('name') for s in skills[:3] if s.get('name')]
-    skills_text = ", ".join(skill_names) if skill_names else "applied machine learning"
+    open_to_work = signals.get('open_to_work_flag', False)
     
-    # Sentence 1: Background and Experience fit
-    if rank <= 15:
-        s1 = f"Outstanding {title} with {exp} years of experience demonstrating strong systems engineering capabilities."
-    elif rank <= 50:
-        s1 = f"Highly qualified {title} with {exp} years of experience and direct expertise in {skills_text}."
-    else:
-        s1 = f"Capable professional with {exp} years of software experience and strong fundamentals in {skills_text}."
-        
-    # Sentence 2: JD Match & Concerns
-    concerns = []
-    if notice > 60:
-        concerns.append(f"{notice}-day notice period")
-    if resp_rate < 0.40:
-        concerns.append("lower response rate")
-        
+    # 1. Company background
+    all_companies = [str(h.get('company') or '').lower() for h in history if h.get('company')]
+    consulting_firms = ["tcs", "infosys", "wipro", "accenture", "cognizant", "capgemini", "tata consultancy", "wipro technologies", "infosys limited"]
+    is_only_consulting = all_companies and all(any(cf in comp for cf in consulting_firms) for comp in all_companies)
+    company_desc = "consulting background" if is_only_consulting else "product background"
+    
+    # 2. Title similarity evaluation
+    relevant_keywords = ["ai", "ml", "machine learning", "deep learning", "data scien", "nlp", "search", "ranking", "retrieval", "applied scientist"]
+    title_lower = title.lower()
+    has_high_sim = any(kw in title_lower for kw in relevant_keywords)
+    title_desc = f"high title similarity ({title})" if has_high_sim else f"semantic alignment to target profile"
+    
+    # 3. Experience range description
+    exp_desc = f"ideal {exp} years of experience" if 5.0 <= exp <= 9.0 else f"{exp} years of experience"
+    
+    s1 = f"Strong overall score driven by {title_desc}, {exp_desc}, and a {company_desc}."
+    
+    # 4. Location evaluations
     loc_lower = str(location).lower()
-    is_local = any(city in loc_lower for city in ["pune", "noida", "delhi", "gurgaon"])
-    willing_relocate = signals.get('willing_to_relocate', True)
-    if not willing_relocate and not is_local:
-        concerns.append("relocation constraint")
-        
-    if concerns:
-        s2 = f"Direct match for the intelligence team, with minor concern on {', '.join(concerns)}."
+    is_local = any(city in loc_lower for city in ["pune", "noida", "delhi", "gurgaon", "ghaziabad", "faridabad"])
+    willing_relocate = signals.get('willing_to_relocate', False)
+    
+    # 5. Behavioral signals
+    behavior_parts = []
+    if open_to_work:
+        behavior_parts.append("active open-to-work status")
     else:
-        s2 = f"Excellent match for ranking/retrieval systems; shows active candidate status and {resp}% response rate."
+        behavior_parts.append("passive search status")
         
+    if notice <= 30:
+        behavior_parts.append(f"prompt {notice}-day notice")
+    else:
+        behavior_parts.append(f"{notice}-day notice period")
+        
+    if resp_rate >= 0.8:
+        behavior_parts.append(f"high {resp}% response rate")
+    elif resp_rate < 0.4:
+        behavior_parts.append(f"low response rate ({resp}%)")
+    else:
+        behavior_parts.append(f"moderate {resp}% response rate")
+        
+    behavior_str = ", ".join(behavior_parts)
+    
+    if is_local:
+        s2 = f"Placement is supported by a local {location} location boost and favorable behavioral signals ({behavior_str})."
+    else:
+        if willing_relocate:
+            s2 = f"Placement is adjusted by a relocation requirement from {location}, balanced by favorable behavioral signals ({behavior_str})."
+        else:
+            s2 = f"Placement is constrained by a relocation requirement from {location} and behavioral signals ({behavior_str})."
+            
     return f"{s1} {s2}"
+
 
 def main():
     parser = argparse.ArgumentParser(description="Rank candidates for Senior AI Engineer JD.")
